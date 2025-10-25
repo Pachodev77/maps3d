@@ -6,10 +6,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 export default function MapTo3DViewer() {
   const [image, setImage] = useState(null);
-  const [heightScale, setHeightScale] = useState(50);
-  const [segments, setSegments] = useState(400);
-  const [invertHeight, setInvertHeight] = useState(false);
-  const [removeText, setRemoveText] = useState(true);
+  const [heightScale, setHeightScale] = useState(31);
+  const [segments, setSegments] = useState(2350);
+  const [invertHeight, setInvertHeight] = useState(true);
+  const [removeText, setRemoveText] = useState(false);
   const [yPosition, setYPosition] = useState(0);
 
   const canvasRef = useRef(null);
@@ -262,7 +262,7 @@ export default function MapTo3DViewer() {
 
   const handleReset = () => {
     setImage(null);
-    setHeightScale(50);
+    setHeightScale(31);
     setSegments(400);
     setInvertHeight(false);
     setRemoveText(true);
@@ -381,7 +381,7 @@ export default function MapTo3DViewer() {
                     <input
                       type="range"
                       min="100"
-                      max="400"
+                      max="6000"
                       step="10"
                       value={segments}
                       onChange={(e) => setSegments(Number(e.target.value))}
