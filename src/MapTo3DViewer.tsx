@@ -3,6 +3,7 @@ import { Upload, RotateCcw, Download } from 'lucide-react';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// @ts-ignore - pako types are available but not being recognized
 import pako from 'pako';
 
 type FeatureType = 'TERRAIN' | 'ROAD' | 'BUILDING';
@@ -60,13 +61,14 @@ export default function MapTo3DViewer() {
     const brightness = (r + g + b) / 3 / 255;
     const rawHeight = invertHeight ? 1 - brightness : brightness;
 
-    const getHeight = (x: number, y: number, width: number, data: Uint8ClampedArray): number => {
-      const r = data[(y * width + x) * 4];
-      const g = data[(y * width + x) * 4 + 1];
-      const b = data[(y * width + x) * 4 + 2];
-      const avg = (r + g + b) / 3;
-      return (avg / 255) * (invertHeight ? -1 : 1) * heightScale + yPosition;
-    };
+    // Helper function to calculate height (currently unused but kept for future use)
+    // const getHeight = (x: number, y: number, width: number, data: Uint8ClampedArray): number => {
+    //   const r = data[(y * width + x) * 4];
+    //   const g = data[(y * width + x) * 4 + 1];
+    //   const b = data[(y * width + x) * 4 + 2];
+    //   const avg = (r + g + b) / 3;
+    //   return (avg / 255) * (invertHeight ? -1 : 1) * heightScale + yPosition;
+    // };
 
     if (removeText) {
       const saturation = Math.max(r, g, b) - Math.min(r, g, b);
@@ -169,7 +171,7 @@ export default function MapTo3DViewer() {
       finalHeightMap[i] = [];
       for (let j = 0; j < segments; j++) {
         const feature = featureMap[i][j];
-        const rawHeight = rawHeightMap[i][j];
+        // rawHeight is used in the map, but we'll access it directly from rawHeightMap
 
         if (feature === 'ROAD') {
           finalHeightMap[i][j] = 0.05;
@@ -203,7 +205,13 @@ export default function MapTo3DViewer() {
     if (sceneRef.current && meshRef.current) {
       sceneRef.current.remove(meshRef.current);
       if (meshRef.current.geometry) meshRef.current.geometry.dispose();
-      if (meshRef.current.material) meshRef.current.material.dispose();
+      if (meshRef.current.material) {
+        if (Array.isArray(meshRef.current.material)) {
+          meshRef.current.material.forEach(mat => mat.dispose());
+        } else {
+          meshRef.current.material.dispose();
+        }
+      }
     }
 
     if (!sceneRef.current) {
@@ -289,8 +297,10 @@ export default function MapTo3DViewer() {
 
     const animate = () => {
       animationRef.current = requestAnimationFrame(animate);
-      controlsRef.current.update();
-      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      if (controlsRef.current) controlsRef.current.update();
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      }
     };
 
     if (animationRef.current) {
