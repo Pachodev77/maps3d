@@ -22,7 +22,7 @@ type ImageState = HTMLImageElement | null;
 export default function MapTo3DViewer() {
   const [image, setImage] = useState<ImageState>(null);
   const [heightScale, setHeightScale] = useState<number>(30);
-  const [segments, setSegments] = useState<number>(2300);
+  const [segments, setSegments] = useState<number>(1150); // Default to half of max (2300/2)
   const [invertHeight, setInvertHeight] = useState<boolean>(true);
   const [removeText, setRemoveText] = useState<boolean>(false);
   const [yPosition, setYPosition] = useState<number>(0);
@@ -336,7 +336,7 @@ export default function MapTo3DViewer() {
   const handleReset = () => {
     setImage(null);
     setHeightScale(50);
-    setSegments(400);
+    setSegments(1150);
     setInvertHeight(false);
     setRemoveText(true);
     setYPosition(0);
@@ -529,17 +529,28 @@ export default function MapTo3DViewer() {
                     <label className="text-white text-sm mb-2 block">
                       Resolución: {segments}x{segments}
                     </label>
-                    <input
-                      type="range"
-                      min="100"
-                      max="600"
-                      step="10"
-                      value={segments}
-                      onChange={(e) => setSegments(Number(e.target.value))}
-                      className="w-full"
-                    />
+                    <div className="flex items-center gap-4">
+                      <input
+                        type="range"
+                        min="100"
+                        max="2300"
+                        step="50"
+                        value={segments}
+                        onChange={(e) => setSegments(Number(e.target.value))}
+                        className="flex-1"
+                      />
+                      <input
+                        type="number"
+                        min="100"
+                        max="2300"
+                        step="50"
+                        value={segments}
+                        onChange={(e) => setSegments(Math.min(2300, Math.max(100, Number(e.target.value))))}
+                        className="w-24 bg-white/5 border border-white/10 text-white rounded px-2 py-1 text-sm"
+                      />
+                    </div>
                     <p className="text-purple-200 text-xs mt-1">
-                      Mayor resolución = más detalle
+                      Rango: 100-2300 (mayor resolución = más detalle)
                     </p>
                   </div>
 
