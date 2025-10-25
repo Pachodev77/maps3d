@@ -22,7 +22,7 @@ type ImageState = HTMLImageElement | null;
 export default function MapTo3DViewer() {
   const [image, setImage] = useState<ImageState>(null);
   const [heightScale, setHeightScale] = useState<number>(30);
-  const [segments, setSegments] = useState<number>(1150); // Default to half of max (2300/2)
+  const [segments, setSegments] = useState<number>(1185); // Default to half of max (2370/2)
   const [invertHeight, setInvertHeight] = useState<boolean>(true);
   const [removeText, setRemoveText] = useState<boolean>(false);
   const [yPosition, setYPosition] = useState<number>(0);
@@ -336,7 +336,7 @@ export default function MapTo3DViewer() {
   const handleReset = () => {
     setImage(null);
     setHeightScale(50);
-    setSegments(1150);
+    setSegments(1185);
     setInvertHeight(false);
     setRemoveText(true);
     setYPosition(0);
@@ -533,8 +533,8 @@ export default function MapTo3DViewer() {
                       <input
                         type="range"
                         min="100"
-                        max="2300"
-                        step="50"
+                        max="2370"
+                        step="10"
                         value={segments}
                         onChange={(e) => setSegments(Number(e.target.value))}
                         className="flex-1"
@@ -542,15 +542,15 @@ export default function MapTo3DViewer() {
                       <input
                         type="number"
                         min="100"
-                        max="2300"
-                        step="50"
+                        max="2370"
+                        step="10"
                         value={segments}
-                        onChange={(e) => setSegments(Math.min(2300, Math.max(100, Number(e.target.value))))}
+                        onChange={(e) => setSegments(Math.min(2370, Math.max(100, Number(e.target.value))))}
                         className="w-24 bg-white/5 border border-white/10 text-white rounded px-2 py-1 text-sm"
                       />
                     </div>
                     <p className="text-purple-200 text-xs mt-1">
-                      Rango: 100-2300 (mayor resolución = más detalle)
+                      Rango: 100-2370 (mayor resolución = más detalle)
                     </p>
                   </div>
 
