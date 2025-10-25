@@ -1,140 +1,203 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Upload, RotateCcw, Download } from 'lucide-react';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import pako from 'pako';
+
+type FeatureType = 'TERRAIN' | 'ROAD' | 'BUILDING';
+
+interface PixelInfo {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+  feature: FeatureType;
+  rawHeight: number;
+}
+
+type ImageState = HTMLImageElement | null;
 
 export default function MapTo3DViewer() {
-  const [image, setImage] = useState(null);
-  const [heightScale, setHeightScale] = useState(31);
-  const [segments, setSegments] = useState(2350);
-  const [invertHeight, setInvertHeight] = useState(true);
-  const [removeText, setRemoveText] = useState(false);
-  const [yPosition, setYPosition] = useState(0);
+  const [image, setImage] = useState<ImageState>(null);
+  const [heightScale, setHeightScale] = useState<number>(30);
+  const [segments, setSegments] = useState<number>(2300);
+  const [invertHeight, setInvertHeight] = useState<boolean>(true);
+  const [removeText, setRemoveText] = useState<boolean>(false);
+  const [yPosition, setYPosition] = useState<number>(0);
 
-  const canvasRef = useRef(null);
-  const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
-  const rendererRef = useRef(null);
-  const meshRef = useRef(null);
-  const animationRef = useRef(null);
-  const controlsRef = useRef(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const meshRef = useRef<THREE.Mesh | null>(null);
+  const animationRef = useRef<number | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
 
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const img = new Image();
-        img.onload = () => {
-          setImage(img);
-        };
-        img.src = event.target.result;
-      };
-      reader.readAsDataURL(file);
-    }
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      if (!e.target?.result) return;
+      const img = new Image();
+      img.onload = () => setImage(img);
+      img.src = e.target.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
-  const getPixelInfo = (imageData, x, y, width) => {
+  const getPixelInfo = (imageData: Uint8ClampedArray, x: number, y: number, width: number): PixelInfo => {
     if (x < 0 || x >= width || y < 0 || y >= width) {
       return { r: 0, g: 0, b: 0, a: 0, feature: 'TERRAIN', rawHeight: 0 };
     }
     const index = (y * width + x) * 4;
-    const r = imageData.data[index];
-    const g = imageData.data[index + 1];
-    const b = imageData.data[index + 2];
-    const a = imageData.data[index + 3];
+    const r = imageData[index];
+    const g = imageData[index + 1];
+    const b = imageData[index + 2];
+    const a = imageData[index + 3];
     const brightness = (r + g + b) / 3 / 255;
     const rawHeight = invertHeight ? 1 - brightness : brightness;
 
+    const getHeight = (x: number, y: number, width: number, data: Uint8ClampedArray): number => {
+      const r = data[(y * width + x) * 4];
+      const g = data[(y * width + x) * 4 + 1];
+      const b = data[(y * width + x) * 4 + 2];
+      const avg = (r + g + b) / 3;
+      return (avg / 255) * (invertHeight ? -1 : 1) * heightScale + yPosition;
+    };
+
     if (removeText) {
+      const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+      if (a < 200 || (r > 220 && g < 80 && b < 80) || (g > 200 && r < 150 && b < 150 && (g - r) > 50) || (saturation > 130 && brightness > 150) || (r < 30 && g < 30 && b < 30)) {
+        return { r, g, b, a, feature: 'TERRAIN', rawHeight: 0.05 };
+      }
+
+      const isRoad = (r: number, g: number, b: number) => {
+        if (r > 200 && g > 150 && b < 130) return true;
+        if (r > 210 && g > 210 && b > 210 && Math.abs(r - g) < 20 && Math.abs(g - b) < 20) return true;
+        return false;
+      };
+
+      if (isRoad(r, g, b)) {
+        return { r, g, b, a, feature: 'ROAD', rawHeight };
+      }
+
+      const isBuilding = (r: number, g: number, b: number) => {
+        const brightness = (r + g + b) / 3;
         const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-        if (a < 200 || (r > 220 && g < 80 && b < 80) || (g > 200 && r < 150 && b < 150 && (g - r) > 50) || (saturation > 130 && brightness > 150) || (r < 30 && g < 30 && b < 30)) {
-            return { r, g, b, a, feature: 'TERRAIN', rawHeight: 0.05 };
+        if (brightness > 90 && brightness < 220 && saturation < 40) {
+          return true;
         }
+        return false;
+      };
 
-        const isRoad = (r, g, b) => {
-          if (r > 200 && g > 150 && b < 130) return true;
-          if (r > 210 && g > 210 && b > 210 && Math.abs(r - g) < 20 && Math.abs(g - b) < 20) return true;
-          return false;
-        };
-
-        if (isRoad(r, g, b)) {
-            return { r, g, b, a, feature: 'ROAD', rawHeight };
-        }
-
-        const isBuilding = (r, g, b) => {
-            const brightness = (r + g + b) / 3;
-            const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-            if (brightness > 90 && brightness < 220 && saturation < 40) {
-                return true;
-            }
-            return false;
-        };
-
-        if (isBuilding(r, g, b)) {
-            return { r, g, b, a, feature: 'BUILDING', rawHeight };
-        }
+      if (isBuilding(r, g, b)) {
+        return { r, g, b, a, feature: 'BUILDING', rawHeight };
+      }
     }
 
     return { r, g, b, a, feature: 'TERRAIN', rawHeight };
   };
 
   useEffect(() => {
-    if (!image || !canvasRef.current) return;
+    if (!image || !(image instanceof HTMLImageElement) || !canvasRef.current) return;
 
-    const tempCanvas = document.createElement('canvas');
+    const processImage = (img: CanvasImageSource, width: number, height: number): HTMLCanvasElement | null => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Eliminar texto si es necesario
+      if (removeText) {
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+
+        // Umbral para detectar colores de texto (blanco/negro)
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Detectar píxeles de texto (blancos o negros puros)
+          const isWhite = r > 230 && g > 230 && b > 230;
+          const isBlack = r < 25 && g < 25 && b < 25;
+
+          if (isWhite || isBlack) {
+            // Reemplazar con el color del terreno circundante
+            data[i] = 150;     // R
+            data[i + 1] = 150; // G
+            data[i + 2] = 150; // B
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      return canvas;
+    };
+
+    const tempCanvas = processImage(image, segments, segments);
+    if (!tempCanvas) return;
+
     const tempCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = segments;
-    tempCanvas.height = segments;
-    tempCtx.drawImage(image, 0, 0, segments, segments);
+    if (!tempCtx) return;
+
     const imageData = tempCtx.getImageData(0, 0, segments, segments);
 
     // Pass 1: Generate raw height map and feature map
-    const rawHeightMap = [];
-    const featureMap = [];
+    const rawHeightMap: number[][] = [];
+    const featureMap: FeatureType[][] = [];
     for (let i = 0; i < segments; i++) {
-        rawHeightMap[i] = [];
-        featureMap[i] = [];
-        for (let j = 0; j < segments; j++) {
-            const { rawHeight, feature } = getPixelInfo(imageData, j, i, segments);
-            rawHeightMap[i][j] = rawHeight;
-            featureMap[i][j] = feature;
-        }
+      rawHeightMap[i] = [];
+      featureMap[i] = [];
+      for (let j = 0; j < segments; j++) {
+        const pixelInfo = getPixelInfo(imageData.data, j, i, segments);
+        rawHeightMap[i][j] = pixelInfo.rawHeight;
+        featureMap[i][j] = pixelInfo.feature;
+      }
     }
 
     // Pass 2: Process maps to create final height map
-    const finalHeightMap = [];
+    const finalHeightMap: number[][] = [];
     for (let i = 0; i < segments; i++) {
-        finalHeightMap[i] = [];
-        for (let j = 0; j < segments; j++) {
-            const feature = featureMap[i][j];
-            const rawHeight = rawHeightMap[i][j];
+      finalHeightMap[i] = [];
+      for (let j = 0; j < segments; j++) {
+        const feature = featureMap[i][j];
+        const rawHeight = rawHeightMap[i][j];
 
-            if (feature === 'ROAD') {
-                finalHeightMap[i][j] = 0.05;
-            } else if (feature === 'BUILDING') {
-                let buildingNeighbors = 0;
-                for (let ni = -1; ni <= 1; ni++) {
-                    for (let nj = -1; nj <= 1; nj++) {
-                        if (ni === 0 && nj === 0) continue;
-                        const ni_abs = i + ni;
-                        const nj_abs = j + nj;
-                        if (ni_abs >= 0 && ni_abs < segments && nj_abs >= 0 && nj_abs < segments && featureMap[ni_abs][nj_abs] === 'BUILDING') {
-                            buildingNeighbors++;
-                        }
-                    }
-                }
-
-                if (buildingNeighbors >= 5) { // Stricter core definition
-                    finalHeightMap[i][j] = invertHeight ? 0.2 : 0.8;
-                } else {
-                    finalHeightMap[i][j] = invertHeight ? 0.4 : 0.6;
-                }
-            } else { // TERRAIN
-                finalHeightMap[i][j] = rawHeight * 0.2;
+        if (feature === 'ROAD') {
+          finalHeightMap[i][j] = 0.05;
+        } else if (feature === 'BUILDING') {
+          let buildingNeighbors = 0;
+          for (let ni = -1; ni <= 1; ni++) {
+            for (let nj = -1; nj <= 1; nj++) {
+              if (ni === 0 && nj === 0) continue;
+              const ni_abs = i + ni;
+              const nj_abs = j + nj;
+              if (ni_abs >= 0 && ni_abs < segments && nj_abs >= 0 && nj_abs < segments && featureMap[ni_abs][nj_abs] === 'BUILDING') {
+                buildingNeighbors++;
+              }
             }
+          }
+          // Si hay suficientes vecinos edificio, es un edificio, si no, es terreno
+          const currentRawHeight = rawHeightMap[i][j];
+          if (buildingNeighbors >= 5) {
+            finalHeightMap[i][j] = invertHeight ? 0.2 : 0.8;
+          } else if (buildingNeighbors >= 3) {
+            finalHeightMap[i][j] = invertHeight ? 0.4 : 0.6;
+          } else {
+            finalHeightMap[i][j] = 0.2 + currentRawHeight * 0.8; // Asegurar altura mínima
+          }
+        } else { // TERRAIN
+          finalHeightMap[i][j] = rawHeightMap[i][j] * 0.2;
         }
+      }
     }
     
     if (sceneRef.current && meshRef.current) {
@@ -262,7 +325,7 @@ export default function MapTo3DViewer() {
 
   const handleReset = () => {
     setImage(null);
-    setHeightScale(31);
+    setHeightScale(50);
     setSegments(400);
     setInvertHeight(false);
     setRemoveText(true);
@@ -273,31 +336,109 @@ export default function MapTo3DViewer() {
   const exportToGLB = () => {
     if (!meshRef.current) return;
 
-    const exporter = new GLTFExporter();
-    
     // Crear una escena temporal solo con el mesh
     const exportScene = new THREE.Scene();
-    const meshClone = meshRef.current.clone();
+    
+    // Clonar el mesh original
+    const originalMesh = meshRef.current as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+    const geometry = originalMesh.geometry;
+    
+    // Reducir significativamente la resolución (1/10 de los vértices)
+    const targetVertices = Math.max(1000, geometry.attributes.position.count / 10);
+    const simplifiedGeometry = new THREE.BufferGeometry();
+    
+    // Tomar solo una fracción de los vértices
+    const positions = geometry.attributes.position.array as Float32Array;
+    const newPositions = [];
+    
+    const step = Math.ceil(positions.length / targetVertices) * 3;
+    for (let i = 0; i < positions.length; i += step) {
+      newPositions.push(positions[i]);
+      if (i + 1 < positions.length) newPositions.push(positions[i + 1]);
+      if (i + 2 < positions.length) newPositions.push(positions[i + 2]);
+    }
+    
+    simplifiedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(newPositions), 3));
+    
+    // Crear un nuevo mesh con la geometría optimizada
+    const meshClone = new THREE.Mesh(
+      simplifiedGeometry,
+      new THREE.MeshBasicMaterial({
+        color: 0x888888,
+        side: THREE.DoubleSide,
+        vertexColors: true
+      })
+    );
+    
+    meshClone.rotation.x = -Math.PI / 2;
     exportScene.add(meshClone);
+    
+    // Configurar el exportador con opciones de compresión mejoradas
+    const exporter = new GLTFExporter();
+    
+    // Opciones de exportación optimizadas para tamaño mínimo
+    const options = {
+      binary: true,
+      onlyVisible: true,
+      truncateDrawRange: true,
+      forceIndices: true,
+      forcePowerOfTwoTextures: true,
+      maxTextureSize: 512, // Reducir aún más el tamaño de las texturas
+      embedImages: false,
+      animations: [],
+      includeCustomExtensions: false,
+      forceIndices16: true, // Usar índices de 16 bits en lugar de 32 bits
+      quantizeAttributes: true, // Reducir la precisión de los atributos
+      quantizePosition: 3, // Reducir precisión de posición
+      quantizeNormal: 1, // Reducir precisión de normales
+      quantizeTexcoord: 2, // Reducir precisión de coordenadas UV
+      quantizeColor: 1, // Reducir precisión de colores
+      quantizeWeight: 1, // Reducir precisión de pesos
+      quantizeSkinIndices: 1, // Reducir precisión de índices de piel
+      force32bitIndices: false, // Evitar índices de 32 bits
+      force64bitIndices: false, // Evitar índices de 64 bits
+      force64bitPositions: false, // Evitar posiciones de 64 bits
+      force64bitNormals: false, // Evitar normales de 64 bits
+      force64bitTexcoords: false, // Evitar coordenadas UV de 64 bits
+      force64bitColors: false, // Evitar colores de 64 bits
+      force64bitWeights: false, // Evitar pesos de 64 bits
+      force64bitSkinIndices: false, // Evitar índices de piel de 64 bits
+    };
     
     exporter.parse(
       exportScene,
       (result) => {
-        // Crear blob y descargar
-        const blob = new Blob([result], { type: 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'mapa-3d.glb';
-        link.click();
-        URL.revokeObjectURL(url);
+        try {
+          // Comprimir el resultado antes de crear el blob
+          const compressed = pako.deflate(new Uint8Array(result as ArrayBuffer), {
+            level: 9, // Máxima compresión
+          });
+          
+          const blob = new Blob([compressed], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'mapa-3d-ultra-optimizado.glb';
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          }, 100);
+        } catch (error) {
+          console.error('Error al crear el archivo:', error);
+          alert('Error al crear el archivo');
+        }
       },
       (error) => {
         console.error('Error al exportar:', error);
         alert('Error al exportar el modelo');
       },
-      { binary: true }
+      options
     );
+    
+    // Limpiar
+    simplifiedGeometry.dispose();
   };
 
   return (
@@ -381,7 +522,7 @@ export default function MapTo3DViewer() {
                     <input
                       type="range"
                       min="100"
-                      max="6000"
+                      max="600"
                       step="10"
                       value={segments}
                       onChange={(e) => setSegments(Number(e.target.value))}
