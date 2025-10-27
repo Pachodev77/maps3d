@@ -26,6 +26,14 @@ export default function MapTo3DViewer() {
   const [invertHeight, setInvertHeight] = useState<boolean>(true);
   const [removeText, setRemoveText] = useState<boolean>(false);
   const [yPosition, setYPosition] = useState<number>(0);
+  const [textureSmoothing, setTextureSmoothing] = useState<number>(1);
+  const [vertexSmoothing, setVertexSmoothing] = useState<number>(0);
+  const [brightness, setBrightness] = useState<number>(1);
+  const [contrast, setContrast] = useState<number>(1);
+  const [metalness, setMetalness] = useState<number>(0);
+  const [roughness, setRoughness] = useState<number>(0.7);
+  const [tiltX, setTiltX] = useState<number>(0); // -Math.PI/4 to Math.PI/4 (-45° to 45°)
+  const [tiltZ, setTiltZ] = useState<number>(0); // -Math.PI/4 to Math.PI/4 (-45° to 45°)
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -103,8 +111,30 @@ export default function MapTo3DViewer() {
     return { r, g, b, a, feature: 'TERRAIN', rawHeight };
   };
 
+  // Add resize handler for the canvas
   useEffect(() => {
-    if (!image || !(image instanceof HTMLImageElement) || !canvasRef.current) return;
+    const handleResize = () => {
+      if (rendererRef.current && cameraRef.current) {
+        const width = canvasRef.current?.clientWidth || window.innerWidth;
+        const height = canvasRef.current?.clientHeight || window.innerHeight;
+        
+        cameraRef.current.aspect = width / height;
+        cameraRef.current.updateProjectionMatrix();
+        rendererRef.current?.setSize(width, height);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
+  // Main effect for 3D model generation
+  useEffect(() => {
+    if (!image || !(image.complete && image.naturalWidth !== 0) || !canvasRef.current) return;
 
     const processImage = (img: CanvasImageSource, width: number, height: number): HTMLCanvasElement | null => {
       const canvas = document.createElement('canvas');
@@ -233,8 +263,10 @@ export default function MapTo3DViewer() {
     if (!rendererRef.current) {
       rendererRef.current = new THREE.WebGLRenderer({
         canvas: canvasRef.current,
-        antialias: true
+        antialias: true,
+        alpha: true
       });
+      rendererRef.current.setPixelRatio(window.devicePixelRatio);
       rendererRef.current.setSize(
         canvasRef.current.clientWidth,
         canvasRef.current.clientHeight
@@ -242,19 +274,77 @@ export default function MapTo3DViewer() {
     }
 
     if (!controlsRef.current) {
-        controlsRef.current = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
-        controlsRef.current.enableDamping = true;
-        controlsRef.current.dampingFactor = 0.05;
+      controlsRef.current = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
+      controlsRef.current.enableDamping = true;
+      controlsRef.current.dampingFactor = 0.1;
+      // Enable zoom and pan but with limits
+      controlsRef.current.enableZoom = true;
+      controlsRef.current.zoomSpeed = 0.8;
+      controlsRef.current.minDistance = 50;
+      controlsRef.current.maxDistance = 500;
+      controlsRef.current.enablePan = true;
+      controlsRef.current.panSpeed = 0.5;
+      // Enable rotation
+      controlsRef.current.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN
+      };
+      // Limit vertical rotation
+      controlsRef.current.minPolarAngle = 0; // radians
+      controlsRef.current.maxPolarAngle = Math.PI / 2; // radians
     }
 
     const geometry = new THREE.PlaneGeometry(200, 200, segments - 1, segments - 1);
     const vertices = geometry.attributes.position.array;
 
-    for (let i = 0; i < segments; i++) {
-      for (let j = 0; j < segments; j++) {
-        const index = (i * segments + j) * 3;
-        const height = finalHeightMap[i][j];
-        vertices[index + 2] = height * heightScale;
+    // Apply vertex smoothing based on the slider value
+    if (vertexSmoothing > 0) {
+      // Create a temporary array to store smoothed heights
+      const smoothedHeights = new Array(segments).fill(0).map(() => new Array(segments).fill(0));
+      
+      // Apply a simple box blur for vertex smoothing
+      const kernelSize = Math.ceil(vertexSmoothing * 5) * 2 + 1; // 1, 3, 5, 7, etc.
+      const halfKernel = Math.floor(kernelSize / 2);
+      
+      for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+          let sum = 0;
+          let count = 0;
+          
+          // Sample neighboring vertices
+          for (let ki = -halfKernel; ki <= halfKernel; ki++) {
+            for (let kj = -halfKernel; kj <= halfKernel; kj++) {
+              const ni = Math.max(0, Math.min(segments - 1, i + ki));
+              const nj = Math.max(0, Math.min(segments - 1, j + kj));
+              sum += finalHeightMap[ni][nj];
+              count++;
+            }
+          }
+          
+          // Calculate weighted average
+          smoothedHeights[i][j] = sum / count;
+        }
+      }
+      
+      // Apply smoothed heights to vertices
+      for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+          const index = (i * segments + j) * 3;
+          // Blend between original and smoothed height based on vertexSmoothing
+          const smoothedHeight = smoothedHeights[i][j] * vertexSmoothing + 
+                               finalHeightMap[i][j] * (1 - vertexSmoothing);
+          vertices[index + 2] = smoothedHeight * heightScale;
+        }
+      }
+    } else {
+      // No smoothing, use original heights
+      for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+          const index = (i * segments + j) * 3;
+          const height = finalHeightMap[i][j];
+          vertices[index + 2] = height * heightScale;
+        }
       }
     }
 
@@ -263,15 +353,69 @@ export default function MapTo3DViewer() {
     const texture = new THREE.CanvasTexture(tempCanvas);
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
+    
+    // Apply texture smoothing based on the slider value
+    if (textureSmoothing > 0) {
+      texture.magFilter = THREE.LinearFilter;
+      texture.minFilter = THREE.LinearMipMapLinearFilter;
+      texture.anisotropy = rendererRef.current?.capabilities.getMaxAnisotropy() || 1;
+    } else {
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+    }
 
+    // Create a canvas for post-processing the texture
+    const postProcessCanvas = document.createElement('canvas');
+    const postProcessCtx = postProcessCanvas.getContext('2d');
+    
+    // Set canvas size to match texture
+    postProcessCanvas.width = texture.image.width;
+    postProcessCanvas.height = texture.image.height;
+    
+    // Apply brightness and contrast
+    if (postProcessCtx) {
+      // Draw original image
+      postProcessCtx.drawImage(texture.image, 0, 0);
+      
+      // Apply brightness and contrast
+      if (brightness !== 1 || contrast !== 1) {
+        const imageData = postProcessCtx.getImageData(0, 0, postProcessCanvas.width, postProcessCanvas.height);
+        const data = imageData.data;
+        
+        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+        
+        for (let i = 0; i < data.length; i += 4) {
+          // Apply brightness
+          data[i] = Math.min(255, Math.max(0, (data[i] - 128) * brightness + 128));
+          data[i + 1] = Math.min(255, Math.max(0, (data[i + 1] - 128) * brightness + 128));
+          data[i + 2] = Math.min(255, Math.max(0, (data[i + 2] - 128) * brightness + 128));
+          
+          // Apply contrast
+          data[i] = Math.min(255, Math.max(0, factor * (data[i] - 128) + 128));
+          data[i + 1] = Math.min(255, Math.max(0, factor * (data[i + 1] - 128) + 128));
+          data[i + 2] = Math.min(255, Math.max(0, factor * (data[i + 2] - 128) + 128));
+        }
+        
+        postProcessCtx.putImageData(imageData, 0, 0);
+      }
+      
+      // Update texture with processed image
+      texture.image = postProcessCanvas;
+      texture.needsUpdate = true;
+    }
+    
     const material = new THREE.MeshStandardMaterial({
       map: texture,
       wireframe: false,
       side: THREE.DoubleSide,
-      flatShading: false
+      flatShading: false,
+      metalness: metalness,
+      roughness: roughness,
+      color: 0xffffff
     });
 
     const mesh = new THREE.Mesh(geometry, material);
+    // Set initial rotation to make it lie flat on the XZ plane
     mesh.rotation.x = -Math.PI / 2;
     meshRef.current = mesh;
     sceneRef.current.add(mesh);
@@ -296,16 +440,33 @@ export default function MapTo3DViewer() {
     }
 
     const animate = () => {
-      animationRef.current = requestAnimationFrame(animate);
-      if (controlsRef.current) controlsRef.current.update();
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return;
+      
+      // Only update if we have a mesh
+      if (meshRef.current) {
+        // Apply base rotation to make it flat, then add tilt
+        meshRef.current.rotation.set(
+          -Math.PI / 2 + tiltX,  // Start with flat rotation, then add X tilt
+          tiltZ * 0.5,           // Apply some Y rotation based on Z tilt for better control
+          tiltZ                  // Apply Z tilt
+        );
+        
+        // Apply material properties
+        const material = meshRef.current.material as THREE.MeshStandardMaterial;
+        material.metalness = metalness;
+        material.roughness = roughness;
+        material.needsUpdate = true;
       }
+      
+      // Always update controls if they exist
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
+      
+      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      animationRef.current = requestAnimationFrame(animate);
     };
 
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-    }
     animate();
 
     return () => {
@@ -313,7 +474,7 @@ export default function MapTo3DViewer() {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [image, heightScale, segments, invertHeight, removeText]);
+  }, [image, segments, invertHeight, removeText, yPosition, textureSmoothing, vertexSmoothing, brightness, contrast, metalness, roughness, heightScale, tiltX, tiltZ]);
 
   useEffect(() => {
     if (meshRef.current) {
@@ -343,136 +504,124 @@ export default function MapTo3DViewer() {
 
   };
 
-  const exportToGLB = () => {
-    if (!meshRef.current) return;
-
-    // Crear una escena temporal solo con el mesh
-    const exportScene = new THREE.Scene();
-    
-    // Clonar el mesh original
-    const originalMesh = meshRef.current as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
-    const geometry = originalMesh.geometry;
-    
-    // Reducir significativamente la resolución (1/10 de los vértices)
-    const targetVertices = Math.max(1000, geometry.attributes.position.count / 10);
-    const simplifiedGeometry = new THREE.BufferGeometry();
-    
-    // Tomar solo una fracción de los vértices
-    const positions = geometry.attributes.position.array as Float32Array;
-    const newPositions = [];
-    
-    const step = Math.ceil(positions.length / targetVertices) * 3;
-    for (let i = 0; i < positions.length; i += step) {
-      newPositions.push(positions[i]);
-      if (i + 1 < positions.length) newPositions.push(positions[i + 1]);
-      if (i + 2 < positions.length) newPositions.push(positions[i + 2]);
+  const exportToGLB = async () => {
+    if (!meshRef.current) {
+      console.error('No hay malla para exportar');
+      return;
     }
-    
-    simplifiedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(newPositions), 3));
-    
-    // Crear un nuevo mesh con la geometría optimizada
-    const meshClone = new THREE.Mesh(
-      simplifiedGeometry,
-      new THREE.MeshBasicMaterial({
-        color: 0x888888,
-        side: THREE.DoubleSide,
-        vertexColors: true
-      })
-    );
-    
-    meshClone.rotation.x = -Math.PI / 2;
-    exportScene.add(meshClone);
-    
-    // Configurar el exportador con opciones de compresión mejoradas
-    const exporter = new GLTFExporter();
-    
-    // Opciones de exportación optimizadas para tamaño mínimo
-    const options = {
-      binary: true,
-      onlyVisible: true,
-      truncateDrawRange: true,
-      forceIndices: true,
-      forcePowerOfTwoTextures: true,
-      maxTextureSize: 512, // Reducir aún más el tamaño de las texturas
-      embedImages: false,
-      animations: [],
-      includeCustomExtensions: false,
-      forceIndices16: true, // Usar índices de 16 bits en lugar de 32 bits
-      quantizeAttributes: true, // Reducir la precisión de los atributos
-      quantizePosition: 3, // Reducir precisión de posición
-      quantizeNormal: 1, // Reducir precisión de normales
-      quantizeTexcoord: 2, // Reducir precisión de coordenadas UV
-      quantizeColor: 1, // Reducir precisión de colores
-      quantizeWeight: 1, // Reducir precisión de pesos
-      quantizeSkinIndices: 1, // Reducir precisión de índices de piel
-      force32bitIndices: false, // Evitar índices de 32 bits
-      force64bitIndices: false, // Evitar índices de 64 bits
-      force64bitPositions: false, // Evitar posiciones de 64 bits
-      force64bitNormals: false, // Evitar normales de 64 bits
-      force64bitTexcoords: false, // Evitar coordenadas UV de 64 bits
-      force64bitColors: false, // Evitar colores de 64 bits
-      force64bitWeights: false, // Evitar pesos de 64 bits
-      force64bitSkinIndices: false, // Evitar índices de piel de 64 bits
-    };
-    
-    exporter.parse(
-      exportScene,
-      (result) => {
-        try {
-          // Comprimir el resultado antes de crear el blob
-          const compressed = pako.deflate(new Uint8Array(result as ArrayBuffer), {
-            level: 9, // Máxima compresión
-          });
-          
-          const blob = new Blob([compressed], { type: 'application/octet-stream' });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = 'mapa-3d-ultra-optimizado.glb';
-          document.body.appendChild(link);
-          link.click();
-          setTimeout(() => {
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-          }, 100);
-        } catch (error) {
-          console.error('Error al crear el archivo:', error);
-          alert('Error al crear el archivo');
-        }
-      },
-      (error) => {
-        console.error('Error al exportar:', error);
-        alert('Error al exportar el modelo');
-      },
-      options
-    );
-    
-    // Limpiar
-    simplifiedGeometry.dispose();
+
+    try {
+      // Crear una escena temporal solo con el mesh
+      const exportScene = new THREE.Scene();
+      
+      // Clonar el mesh original con su material
+      const originalMesh = meshRef.current as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+      
+      // Crear una copia de la geometría original
+      const geometry = originalMesh.geometry.clone();
+      
+      // Crear un material estándar para la exportación
+      const material = new THREE.MeshStandardMaterial({
+        map: (originalMesh.material as THREE.MeshStandardMaterial).map,
+        metalness: metalness,
+        roughness: roughness,
+        side: THREE.DoubleSide
+      });
+      
+      // Crear el mesh para exportar
+      const mesh = new THREE.Mesh(geometry, material);
+      
+      // Aplicar la rotación correcta
+      mesh.rotation.x = -Math.PI / 2; // Make it lie flat
+      mesh.rotation.y = 0;
+      mesh.rotation.z = 0;
+      
+      // Asegurarse de que las normales estén calculadas correctamente
+      if (geometry.attributes.normal === undefined) {
+        geometry.computeVertexNormals();
+      }
+      
+      // Añadir a la escena
+      exportScene.add(mesh);
+      
+      // Añadir luces básicas para mejor visualización
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+      exportScene.add(ambientLight);
+      
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      directionalLight.position.set(1, 1, 1);
+      exportScene.add(directionalLight);
+      
+      // Configurar el exportador
+      const exporter = new GLTFExporter();
+      
+      // Exportar el modelo
+      const glb = await new Promise((resolve, reject) => {
+        exporter.parse(
+          exportScene,
+          resolve,
+          reject,
+          {
+            binary: true,
+            onlyVisible: true,
+            truncateDrawRange: true,
+            maxTextureSize: 1024,
+            embedImages: true,
+            animations: []
+          }
+        );
+      });
+      
+      // Crear un blob y descargar
+      const blob = new Blob([glb as ArrayBuffer], { type: 'model/gltf-binary' });
+      const url = URL.createObjectURL(blob);
+      
+      // Crear un enlace de descarga con un nombre de archivo único
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `terrain_model_${timestamp}.glb`;
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      
+      // Limpieza
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+    } catch (error) {
+      console.error('Error durante la exportación:', error);
+      alert('Error al exportar el modelo: ' + (error as Error).message);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4 overflow-hidden">
+      <div className="max-w-7xl mx-auto h-[calc(100vh-2rem)] flex flex-col">
+        <div className="text-center mb-2">
+          <h1 className="text-3xl font-bold text-white mb-1">
             Visor 3D de Mapas
           </h1>
-          <p className="text-purple-200">
+          <p className="text-purple-200 text-sm">
             Convierte imágenes de mapas en modelos 3D interactivos
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 h-[calc(100vh-8rem)]">
           {/* Panel de controles */}
-          <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-            <h2 className="text-xl font-semibold text-white mb-4">Controles</h2>
-            
-            <div className="space-y-4">
+          <div className="bg-white/10 backdrop-blur-lg rounded-xl border border-white/20 flex flex-col h-full overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-white mb-3">Configuración</h2>
+              
+              {/* Vista previa de la imagen */}
+              <div className="bg-black/30 rounded-lg p-2 border border-white/10">
               {!image ? (
-                <label className="flex flex-col items-center justify-center h-40 border-2 border-dashed border-purple-400 rounded-lg cursor-pointer hover:bg-white/5 transition-colors">
-                  <Upload className="w-12 h-12 text-purple-400 mb-2" />
-                  <span className="text-purple-200">Cargar imagen de mapa</span>
+                <label className="flex flex-col items-center justify-center h-24 border-2 border-dashed border-purple-400 rounded-lg cursor-pointer hover:bg-white/5 transition-colors">
+                  <Upload className="w-6 h-6 text-purple-400 mb-1" />
+                  <span className="text-purple-200 text-xs">Cargar imagen de mapa</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -481,167 +630,308 @@ export default function MapTo3DViewer() {
                   />
                 </label>
               ) : (
-                <div>
-                  <img
-                    src={image.src}
-                    alt="Mapa cargado"
-                    className="w-full rounded-lg mb-4"
-                  />
-                  <div className="space-y-2">
+                <div className="space-y-1">
+                  <div className="relative w-full h-20 overflow-hidden rounded-md border border-white/10">
+                    <img
+                      src={image.src}
+                      alt="Vista previa del mapa"
+                      className="w-full h-full object-contain bg-black/50"
+                    />
+                  </div>
+                  <div className="flex gap-1">
                     <button
                       onClick={handleReset}
-                      className="w-full bg-red-500/20 hover:bg-red-500/30 text-red-200 py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                      className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-200 py-1 px-2 rounded text-xs flex items-center justify-center gap-1"
                     >
-                      <RotateCcw size={18} />
+                      <RotateCcw size={12} />
                       Resetear
                     </button>
                     <button
                       onClick={exportToGLB}
-                      className="w-full bg-green-500/20 hover:bg-green-500/30 text-green-200 py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                      className="flex-1 bg-green-500/20 hover:bg-green-500/30 text-green-200 py-1 px-2 rounded text-xs flex items-center justify-center gap-1"
                     >
-                      <Download size={18} />
-                      Descargar GLB
+                      <Download size={12} />
+                      Exportar
                     </button>
                   </div>
                 </div>
               )}
-
-              {image && (
-                <>
-                  <div>
-                    <label className="text-white text-sm mb-2 block">
-                      Escala de Altura: {heightScale}
-                    </label>
-                    <input
-                      type="range"
-                      min="-100"
-                      max="100"
-                      value={heightScale}
-                      onChange={(e) => setHeightScale(Number(e.target.value))}
-                      className="w-full"
-                    />
-                    <p className="text-purple-200 text-xs mt-1">
-                      Negativo = invertir depresiones
-                    </p>
+            </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 pt-0">
+              <div className="space-y-4 pb-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Resolution: {segments} segments</label>
+                  <input
+                    type="range"
+                    min="100"
+                    max="2370"
+                    step="10"
+                    value={segments}
+                    onChange={(e) => setSegments(Number(e.target.value))}
+                    className="w-full accent-purple-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Low</span>
+                    <span>Medium</span>
+                    <span>High</span>
                   </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Height Scale: {heightScale}%</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={heightScale}
+                    onChange={(e) => setHeightScale(Number(e.target.value))}
+                    className="w-full accent-purple-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Low</span>
+                    <span>Medium</span>
+                    <span>High</span>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Texture Smoothing: {textureSmoothing.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={textureSmoothing}
+                    onChange={(e) => setTextureSmoothing(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Sharp</span>
+                    <span>Smooth</span>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Terrain Smoothing: {vertexSmoothing.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={vertexSmoothing}
+                    onChange={(e) => setVertexSmoothing(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Sharp</span>
+                    <span>Smooth</span>
+                  </div>
+                </div>
 
-                  <div>
-                    <label className="text-white text-sm mb-2 block">
-                      Resolución: {segments}x{segments}
-                    </label>
-                    <div className="flex items-center gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Brightness: {brightness.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.1"
+                    value={brightness}
+                    onChange={(e) => setBrightness(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Dark</span>
+                    <span>Bright</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Contrast: {contrast.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.1"
+                    value={contrast}
+                    onChange={(e) => setContrast(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Low</span>
+                    <span>High</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Metalness: {metalness.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={metalness}
+                    onChange={(e) => setMetalness(parseFloat(e.target.value))}
+                    className="w-full accent-purple-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Matte</span>
+                    <span>Intermedio</span>
+                    <span>Metálico</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Roughness: {roughness.toFixed(1)}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={roughness}
+                    onChange={(e) => setRoughness(parseFloat(e.target.value))}
+                    className="w-full accent-purple-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Suave</span>
+                    <span>Intermedio</span>
+                    <span>Áspero</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-white/10">
+                  <h3 className="text-sm font-medium text-purple-300 mb-3">Opciones Adicionales</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200 mb-1">Posición Y: {yPosition.toFixed(1)}</label>
                       <input
                         type="range"
-                        min="100"
-                        max="2370"
-                        step="10"
-                        value={segments}
-                        onChange={(e) => setSegments(Number(e.target.value))}
-                        className="flex-1"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value={yPosition}
+                        onChange={(e) => setYPosition(Number(e.target.value))}
+                        className="w-full"
                       />
-                      <input
-                        type="number"
-                        min="100"
-                        max="2370"
-                        step="10"
-                        value={segments}
-                        onChange={(e) => setSegments(Math.min(2370, Math.max(100, Number(e.target.value))))}
-                        className="w-24 bg-white/5 border border-white/10 text-white rounded px-2 py-1 text-sm"
-                      />
+                      <div className="flex justify-between text-xs text-gray-400">
+                        <span>Abajo</span>
+                        <span>Centro</span>
+                        <span>Arriba</span>
+                      </div>
                     </div>
-                    <p className="text-purple-200 text-xs mt-1">
-                      Rango: 100-2370 (mayor resolución = más detalle)
-                    </p>
-                  </div>
 
-                  <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
-                    <label className="text-white text-sm">
-                      Invertir Altura
-                    </label>
-                    <button
-                      onClick={() => setInvertHeight(!invertHeight)}
-                      className={`w-12 h-6 rounded-full transition-colors ${
-                        invertHeight ? 'bg-purple-500' : 'bg-gray-600'
-                      }`}
-                    >
-                      <div
-                        className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                          invertHeight ? 'translate-x-6' : 'translate-x-1'
-                        }`}
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center text-sm text-gray-200">
+                        <input
+                          type="checkbox"
+                          checked={invertHeight}
+                          onChange={(e) => setInvertHeight(e.target.checked)}
+                          className="mr-2 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        Invertir Altura
+                      </label>
+                      <label className="flex items-center text-sm text-gray-200">
+                        <input
+                          type="checkbox"
+                          checked={removeText}
+                          onChange={(e) => setRemoveText(e.target.checked)}
+                          className="mr-2 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        Quitar Texto
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-white/10">
+                  <h3 className="text-sm font-medium text-purple-300 mb-3">Inclinación del Modelo</h3>
+                  <div className="space-y-4 mb-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200 mb-1">Inclinación Frontal: {(tiltX * 180 / Math.PI).toFixed(0)}°</label>
+                      <input
+                        type="range"
+                        min="-45"
+                        max="45"
+                        step="1"
+                        value={tiltX * 180 / Math.PI}
+                        onChange={(e) => setTiltX(Number(e.target.value) * Math.PI / 180)}
+                        className="w-full accent-purple-500"
                       />
-                    </button>
-                  </div>
+                      <div className="flex justify-between text-xs text-gray-400">
+                        <span>Hacia atrás</span>
+                        <span>Recto</span>
+                        <span>Hacia adelante</span>
+                      </div>
+                    </div>
 
-                  <div>
-                    <label className="text-white text-sm mb-2 block">
-                      Posición Y: {yPosition}
-                    </label>
-                    <input
-                      type="range"
-                      min="-50"
-                      max="50"
-                      step="1"
-                      value={yPosition}
-                      onChange={(e) => setYPosition(Number(e.target.value))}
-                      className="w-full"
-                    />
-                    <p className="text-purple-200 text-xs mt-1">
-                      Mover el modelo verticalmente
-                    </p>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
-                    <label className="text-white text-sm">
-                      Filtrar Textos/Marcadores
-                    </label>
-                    <button
-                      onClick={() => setRemoveText(!removeText)}
-                      className={`w-12 h-6 rounded-full transition-colors ${
-                        removeText ? 'bg-purple-500' : 'bg-gray-600'
-                      }`}
-                    >
-                      <div
-                        className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                          removeText ? 'translate-x-6' : 'translate-x-1'
-                        }`}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200 mb-1">Inclinación Lateral: {(tiltZ * 180 / Math.PI).toFixed(0)}°</label>
+                      <input
+                        type="range"
+                        min="-45"
+                        max="45"
+                        step="1"
+                        value={tiltZ * 180 / Math.PI}
+                        onChange={(e) => setTiltZ(Number(e.target.value) * Math.PI / 180)}
+                        className="w-full accent-purple-500"
                       />
-                    </button>
+                      <div className="flex justify-between text-xs text-gray-400">
+                        <span>Izquierda</span>
+                        <span>Centro</span>
+                        <span>Derecha</span>
+                      </div>
+                    </div>
                   </div>
-                </>
-              )}
-            </div>
+                </div>
 
-            <div className="mt-6 p-4 bg-purple-500/10 rounded-lg border border-purple-500/30">
-              <h3 className="text-white font-semibold mb-2 text-sm">💡 Consejos</h3>
-              <ul className="text-purple-200 text-xs space-y-1">
-                <li>• Usa mapas de calles o topográficos</li>
-                <li>• Invierte altura para crear "valles"</li>
-                <li>• Filtra textos para mejor geometría</li>
-                <li>• Edificios = zonas claras/oscuras</li>
-                <li>• Agua = azul, verde = parques</li>
-              </ul>
+                <div className="pt-2 border-t border-white/10">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-sm font-medium text-purple-300">Opciones</h3>
+                    <div className="flex items-center space-x-2">
+                      <label className="flex items-center text-xs text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={invertHeight}
+                          onChange={(e) => setInvertHeight(e.target.checked)}
+                          className="mr-1 h-3 w-3 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        Invertir altura
+                      </label>
+                      <label className="flex items-center text-xs text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={removeText}
+                          onChange={(e) => setRemoveText(e.target.checked)}
+                          className="mr-1 h-3 w-3 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        Quitar texto
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Visor 3D */}
-          <div className="lg:col-span-2 bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-            <h2 className="text-xl font-semibold text-white mb-4">Vista 3D</h2>
-            <div className="relative bg-slate-900 rounded-lg overflow-hidden" style={{ height: '600px' }}>
-              {!image ? (
-                <div className="absolute inset-0 flex items-center justify-center text-purple-300">
-                  <div className="text-center">
-                    <Upload className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                    <p>Carga una imagen para ver el modelo 3D</p>
+          {/* Vista previa 3D */}
+          <div className="lg:col-span-3 bg-black/50 rounded-xl overflow-hidden border border-white/20 relative">
+            <canvas
+              ref={canvasRef}
+              className="w-full h-full block"
+              style={{ backgroundColor: '#0f172a' }}
+            />
+            {!image && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                <div className="text-center p-4 max-w-md">
+                  <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-purple-500/20 flex items-center justify-center">
+                    <Upload className="w-6 h-6 text-purple-300" />
                   </div>
+                  <h3 className="text-white text-base font-medium mb-1">Sin mapa cargado</h3>
+                  <p className="text-purple-200 text-xs">Carga una imagen en el panel de la izquierda</p>
                 </div>
-              ) : (
-                <canvas
-                  ref={canvasRef}
-                  className="w-full h-full"
-                  style={{ width: '100%', height: '100%' }}
-                />
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
